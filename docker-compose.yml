@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+  nogonad-chat:
+    container_name: nogonad-chat
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "5010:5010"
+    env_file:
+      - .env.local
+    environment:
+      NODE_ENV: production
+      PORT: 5010
+    volumes:
+      - nogonad_storage:/app/storage
+
+volumes:
+  nogonad_storage:
