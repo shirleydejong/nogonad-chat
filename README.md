@@ -1,36 +1,88 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Nano Banana Image Studio
 
-## Getting Started
+A focused image generation and editing web app built with Next.js and Google GenAI.
 
-First, run the development server:
+This project is intentionally **vibe-coded**: fast iteration, practical UX choices, and direct product-first implementation.
+
+## What This App Does
+
+- Generates images using a fixed Nano Banana model set.
+- Supports image editing with:
+	- a required base image
+	- optional reference images
+	- optional mask image
+- Stores generated results in a persistent server-side library.
+- Supports deleting images from the library.
+- Keeps your latest prompt, model, aspect ratio, and image size in session storage.
+
+## Fixed Model List
+
+The model picker is intentionally fixed to:
+
+- `gemini-3.1-flash-lite-image` (Nano Banana 2 Lite)
+- `gemini-3.1-flash-image` (Nano Banana 2)
+- `gemini-3-pro-image` (Nano Banana Pro)
+
+## Tech Stack
+
+- Next.js 16 (App Router)
+- React 19
+- TypeScript
+- Tailwind CSS 4
+- `@google/genai`
+
+## Environment Variables
+
+Create a `.env.local` file in the project root:
+
+```env
+GOOGLE_API_KEY=your_google_api_key
+```
+
+The app also supports:
+
+- `GEMINI_API_KEY`
+- `GOOGLE_GENAI_API_KEY`
+
+## Local Development
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run dev server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The default dev port in this project is `5010`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Production Build
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+npm run start
+```
 
-## Learn More
+## Project Structure
 
-To learn more about Next.js, take a look at the following resources:
+- `app/page.tsx` - server entry that hydrates initial model/library data
+- `app/studio.tsx` - main client UI
+- `app/api/generate/route.ts` - generation and edit endpoint
+- `app/api/models/route.ts` - model list endpoint
+- `app/api/library/**` - library metadata/image/delete endpoints
+- `lib/google-genai.ts` - GenAI client + model config
+- `lib/library-store.ts` - server filesystem storage for the image library
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Notes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- Output is stored as PNG in the app library.
+- The app is currently single-user and uses filesystem persistence.
+- This is a focused image workflow app, not a general chat assistant.
 
-## Deploy on Vercel
+## Disclaimer
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Model behavior and availability can change over time. If Google deprecates or renames model IDs, update the fixed list in `lib/google-genai.ts`.
