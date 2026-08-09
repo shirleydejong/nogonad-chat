@@ -9,8 +9,6 @@ services:
     restart: unless-stopped
     ports:
       - "5010:5010"
-    env_file:
-      - .env.local
     environment:
       NODE_ENV: production
       PORT: 5010
