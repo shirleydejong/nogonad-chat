@@ -176,6 +176,10 @@ export async function POST(request: Request) {
       contents: [{ role: "user", parts }],
       config: {
         responseModalities: ["IMAGE", "TEXT"],
+        imageConfig: {
+          aspectRatio,
+          imageSize,
+        },
       },
     });
 
