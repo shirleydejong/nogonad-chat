@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AvailableImageModel, ImageAspectRatio, ImageSizeChoice } from "@/lib/google-genai";
 import type { LibraryItem } from "@/lib/library-store";
 
@@ -26,18 +26,18 @@ function formatDate(value: string) {
 }
 
 export function ImageStudio({ initialModels, initialModelError, initialLibraryItems }: StudioProps) {
-  const [mode, setMode] = useState<"generate" | "edit">("generate");
   const [model, setModel] = useState(initialModels[0]?.id ?? "");
   const [prompt, setPrompt] = useState("");
   const [aspectRatio, setAspectRatio] = useState<ImageAspectRatio>("1:1");
   const [imageSize, setImageSize] = useState<ImageSizeChoice>("1K");
-  const [baseFile, setBaseFile] = useState<File | null>(null);
-  const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
-  const [maskFile, setMaskFile] = useState<File | null>(null);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
   const [items, setItems] = useState(initialLibraryItems);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(initialLibraryItems[0]?.id ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(initialModelError ?? null);
+  const [addingUploadIds, setAddingUploadIds] = useState<string[]>([]);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedItem = useMemo(
     () => items.find((item) => item.id === selectedItemId) ?? items[0] ?? null,
@@ -82,6 +82,103 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
     sessionStorage.setItem(SESSION_SIZE_KEY, imageSize);
   }, [imageSize]);
 
+  function isAcceptedImage(file: File) {
+    return file.type.startsWith("image/");
+  }
+
+  function appendUploadFileArray(incomingFiles: File[]) {
+    if (incomingFiles.length === 0) {
+      return;
+    }
+
+    const validFiles = incomingFiles.filter(isAcceptedImage);
+
+    if (validFiles.length !== incomingFiles.length) {
+      setError("Only image files are allowed in uploads.");
+    }
+
+    if (validFiles.length === 0) {
+      return;
+    }
+
+    setUploadFiles((current) => {
+      const seen = new Set(current.map((file) => `${file.name}:${file.size}:${file.lastModified}`));
+      const deduped = validFiles.filter((file) => {
+        const key = `${file.name}:${file.size}:${file.lastModified}`;
+        if (seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      });
+
+      return [...current, ...deduped];
+    });
+  }
+
+  function appendUploadFiles(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) {
+      return;
+    }
+
+    appendUploadFileArray(Array.from(fileList));
+  }
+
+  async function addLibraryItemAsUpload(item: LibraryItem) {
+    if (addingUploadIds.includes(item.id)) {
+      return;
+    }
+
+    setAddingUploadIds((current) => [...current, item.id]);
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/library/${item.id}/image`);
+
+      if (!response.ok) {
+        throw new Error("Could not load the selected library image.");
+      }
+
+      const blob = await response.blob();
+
+      if (!blob.type.startsWith("image/")) {
+        throw new Error("Only image files are allowed in uploads.");
+      }
+
+      const timestamp = Number.isNaN(Date.parse(item.createdAt)) ? Date.now() : Date.parse(item.createdAt);
+      const file = new File([blob], `${item.id}.png`, {
+        type: blob.type || item.mimeType || "image/png",
+        lastModified: timestamp,
+      });
+
+      appendUploadFileArray([file]);
+    } catch (libraryUploadError) {
+      setError(libraryUploadError instanceof Error ? libraryUploadError.message : "Could not add library image as upload.");
+    } finally {
+      setAddingUploadIds((current) => current.filter((id) => id !== item.id));
+    }
+  }
+
+  function handleUploadInputChange(event: React.ChangeEvent<HTMLInputElement>) {
+    appendUploadFiles(event.target.files);
+    event.target.value = "";
+  }
+
+  function handleDrop(event: React.DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setIsDragOver(false);
+    appendUploadFiles(event.dataTransfer.files);
+  }
+
+  function removeUploadFile(index: number) {
+    setUploadFiles((current) => current.filter((_, fileIndex) => fileIndex !== index));
+  }
+
+  function isLibraryItemUploaded(itemId: string) {
+    const expectedName = `${itemId}.png`;
+    return uploadFiles.some((file) => file.name === expectedName);
+  }
+
   async function handleSubmit() {
     if (!model) {
       setError("Select a model first.");
@@ -93,32 +190,18 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
       return;
     }
 
-    if (mode === "edit" && !baseFile) {
-      setError("Add a base image for edit mode.");
-      return;
-    }
-
     setBusy(true);
     setError(null);
 
     try {
       const formData = new FormData();
-      formData.set("mode", mode);
       formData.set("model", model);
       formData.set("prompt", prompt);
       formData.set("aspectRatio", aspectRatio);
       formData.set("imageSize", imageSize);
 
-      if (baseFile) {
-        formData.set("baseImage", baseFile);
-      }
-
-      for (const file of referenceFiles) {
-        formData.append("references", file);
-      }
-
-      if (maskFile) {
-        formData.set("mask", maskFile);
+      for (const file of uploadFiles) {
+        formData.append("uploads", file);
       }
 
       const response = await fetch("/api/generate", {
@@ -151,6 +234,11 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
   }
 
   async function handleDelete(id: string) {
+    const confirmed = window.confirm("Weet je zeker dat je deze afbeelding wilt verwijderen?");
+    if (!confirmed) {
+      return;
+    }
+
     const response = await fetch(`/api/library/${id}`, { method: "DELETE" });
 
     if (!response.ok && response.status !== 204) {
@@ -173,29 +261,17 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
         <div className="rounded-[28px] border border-white/10 bg-[color:var(--panel)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:p-8">
           <div className="flex flex-col gap-4 border-b border-white/10 pb-6">
             <div className="inline-flex w-fit items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-xs font-medium uppercase tracking-[0.24em] text-cyan-100">
-              Gemini image workspace
+              Nano Banana 🍌
             </div>
             <div className="space-y-2">
-              <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Create and edit images only.</h1>
+              <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Create images</h1>
               <p className="max-w-2xl text-sm leading-6 text-[color:var(--muted)] sm:text-base">
-                Fixed Nano Banana model set, PNG output, reference uploads for edits, and a persistent server library.
+                Image generation powered by Google Gemini, using the Nano Banana models.
               </p>
             </div>
           </div>
 
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-slate-200">Mode</span>
-              <select
-                value={mode}
-                onChange={(event) => setMode(event.target.value === "edit" ? "edit" : "generate")}
-                className="rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300/40"
-              >
-                <option value="generate">Generate</option>
-                <option value="edit">Edit</option>
-              </select>
-            </label>
-
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium text-slate-200">Model</span>
               <select
@@ -215,13 +291,15 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
               </select>
             </label>
 
+            <div className="hidden sm:block" aria-hidden="true" />
+
             <label className="flex flex-col gap-2 sm:col-span-2">
               <span className="text-sm font-medium text-slate-200">Prompt</span>
               <textarea
                 rows={6}
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
-                placeholder="Describe the image you want to create or how you want to edit the reference image."
+                placeholder="Describe what you want. Without uploads, it generates from scratch. With uploads, your prompt decides how to use them."
                 className="rounded-3xl border border-white/10 bg-slate-950/60 px-4 py-4 text-sm leading-6 text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-300/40"
               />
             </label>
@@ -256,49 +334,59 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
               </select>
             </label>
 
-            {mode === "edit" ? (
-              <>
-                <label className="flex flex-col gap-2 sm:col-span-2">
-                  <span className="text-sm font-medium text-slate-200">Base image</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(event) => setBaseFile(event.target.files?.[0] ?? null)}
-                    className="rounded-2xl border border-dashed border-white/15 bg-slate-950/45 px-4 py-4 text-sm text-slate-300 file:mr-4 file:rounded-full file:border-0 file:bg-cyan-300/15 file:px-4 file:py-2 file:text-cyan-100"
-                  />
-                  <span className="text-xs leading-5 text-[color:var(--muted)]">
-                    Required. This image is the base canvas that will be edited.
-                  </span>
-                </label>
+            <label
+              className={`flex flex-col gap-2 sm:col-span-2 rounded-2xl border border-dashed px-4 py-4 text-sm transition ${
+                isDragOver ? "border-cyan-300/60 bg-cyan-300/10" : "border-white/15 bg-slate-950/45"
+              }`}
+              onDragOver={(event) => {
+                event.preventDefault();
+                if (!isDragOver) {
+                  setIsDragOver(true);
+                }
+              }}
+              onDragLeave={() => setIsDragOver(false)}
+              onDrop={handleDrop}
+            >
+              <span className="text-sm font-medium text-slate-200">Uploads (optional)</span>
+              <input
+                ref={uploadInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleUploadInputChange}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => uploadInputRef.current?.click()}
+                className="w-fit rounded-full border border-cyan-300/25 bg-cyan-300/10 px-4 py-2 text-xs font-semibold text-cyan-50 transition hover:bg-cyan-300/18"
+              >
+                Choose images
+              </button>
+              <span className="text-xs leading-5 text-[color:var(--muted)]">
+                Drag and drop images here or click to add. Uploaded images are treated equally as prompt context.
+              </span>
 
-                <label className="flex flex-col gap-2 sm:col-span-2">
-                  <span className="text-sm font-medium text-slate-200">Reference images</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={(event) => setReferenceFiles(Array.from(event.target.files ?? []))}
-                    className="rounded-2xl border border-dashed border-white/15 bg-slate-950/45 px-4 py-4 text-sm text-slate-300 file:mr-4 file:rounded-full file:border-0 file:bg-cyan-300/15 file:px-4 file:py-2 file:text-cyan-100"
-                  />
-                  <span className="text-xs leading-5 text-[color:var(--muted)]">
-                    Optional. These images are extra references to guide style/content.
-                  </span>
-                </label>
-
-                <label className="flex flex-col gap-2 sm:col-span-2">
-                  <span className="text-sm font-medium text-slate-200">Mask image</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(event) => setMaskFile(event.target.files?.[0] ?? null)}
-                    className="rounded-2xl border border-dashed border-white/15 bg-slate-950/45 px-4 py-4 text-sm text-slate-300 file:mr-4 file:rounded-full file:border-0 file:bg-cyan-300/15 file:px-4 file:py-2 file:text-cyan-100"
-                  />
-                  <span className="text-xs leading-5 text-[color:var(--muted)]">
-                    Optional inpainting mask. White areas indicate what should be edited.
-                  </span>
-                </label>
-              </>
-            ) : null}
+              {uploadFiles.length > 0 ? (
+                <ul className="mt-2 grid gap-2">
+                  {uploadFiles.map((file, index) => (
+                    <li
+                      key={`${file.name}:${file.size}:${file.lastModified}:${index}`}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2"
+                    >
+                      <span className="truncate text-xs text-slate-200">{file.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeUploadFile(index)}
+                        className="rounded-full border border-white/15 px-2 py-1 text-[11px] font-medium text-slate-300 transition hover:border-rose-300/35 hover:bg-rose-300/10"
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </label>
           </div>
 
           <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -308,12 +396,8 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
               disabled={busy || initialModels.length === 0 || !prompt.trim()}
               className="rounded-full bg-[linear-gradient(135deg,var(--accent),var(--accent-strong))] px-5 py-3 text-sm font-semibold text-slate-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {busy ? "Working…" : mode === "edit" ? "Edit image" : "Generate image"}
+              {busy ? "Working..." : uploadFiles.length > 0 ? "Create with uploads" : "Generate image"}
             </button>
-
-            <p className="text-sm text-[color:var(--muted)]">
-              Output is always stored as PNG in the server library.
-            </p>
           </div>
 
           {error ? (
@@ -326,37 +410,26 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
         <aside className="rounded-[28px] border border-white/10 bg-[color:var(--panel)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.28)] backdrop-blur-xl sm:p-8">
           <div className="flex items-center justify-between gap-4 border-b border-white/10 pb-4">
             <div>
-              <h2 className="text-xl font-semibold">Result</h2>
-              <p className="text-sm text-[color:var(--muted)]">The latest saved image appears here.</p>
-            </div>
-            <div className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.24em] text-slate-300">
-              Library aware
+              <h2 className="text-xl font-semibold">Last result</h2>
             </div>
           </div>
 
-          <div className="mt-6 overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/60">
+          <div className="mt-6 overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/60 flex flex-col">
             {selectedItem ? (
               <>
-                <div className="relative aspect-square w-full">
-                  <Image
-                    src={`/api/library/${selectedItem.id}/image`}
-                    alt={selectedItem.prompt}
-                    fill
-                    unoptimized
-                    sizes="(max-width: 1024px) 100vw, 40vw"
-                    className="object-cover"
-                  />
+                <div className="w-full">
+                  <img src={`/api/library/${selectedItem.id}/image`} alt={selectedItem.prompt} className="block h-auto w-full" />
                 </div>
                 <div className="space-y-3 p-5">
                   <p className="text-sm font-medium text-slate-100">{selectedItem.prompt}</p>
                   <div className="grid gap-2 text-xs text-[color:var(--muted)] sm:grid-cols-2">
                     <span>Model: {selectedItem.model}</span>
-                    <span>Mode: {selectedItem.mode}</span>
                     <span>Ratio: {selectedItem.aspectRatio}</span>
                     <span>Size: {selectedItem.imageSize}</span>
-                    <span>References: {selectedItem.referenceCount}</span>
+                    <span>Uploads: {selectedItem.referenceCount}</span>
                     <span>{formatDate(selectedItem.createdAt)}</span>
                   </div>
+                  <div className="flex items-center gap-2">
                   <a
                     href={`/api/library/${selectedItem.id}/image`}
                     download={`${selectedItem.id}.png`}
@@ -364,6 +437,19 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
                   >
                     Download PNG
                   </a>
+                  <button
+                    type="button"
+                    onClick={() => void addLibraryItemAsUpload(selectedItem)}
+                    disabled={addingUploadIds.includes(selectedItem.id) || isLibraryItemUploaded(selectedItem.id)}
+                    className="inline-flex rounded-full border border-white/10 px-4 py-2 text-xs font-semibold text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/10 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isLibraryItemUploaded(selectedItem.id)
+                      ? "Uploaded"
+                      : addingUploadIds.includes(selectedItem.id)
+                        ? "Adding..."
+                        : "Add as upload"}
+                  </button>
+                  </div>
                 </div>
               </>
             ) : (
@@ -371,7 +457,7 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
                 <div className="rounded-full border border-dashed border-white/15 px-4 py-2 text-slate-300">
                   No image selected yet
                 </div>
-                <p>Generate or edit an image to preview it here.</p>
+                <p>Generate from scratch or upload context images to preview the result here.</p>
               </div>
             )}
           </div>
@@ -405,7 +491,7 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
                       fill
                       unoptimized
                       sizes="(max-width: 640px) 100vw, (max-width: 1280px) 50vw, 33vw"
-                      className="object-cover"
+                      className="object-cover cursor-pointer"
                     />
                   </div>
                 </button>
@@ -417,7 +503,7 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
                   <div className="flex items-center justify-between gap-3 text-xs text-[color:var(--muted)]">
                     <span>{item.aspectRatio}</span>
                     <span>{item.imageSize}</span>
-                    <span>{item.mode}</span>
+                    <span>{formatDate(item.createdAt)}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <a
@@ -427,6 +513,18 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
                     >
                       Download
                     </a>
+                    <button
+                      type="button"
+                      onClick={() => void addLibraryItemAsUpload(item)}
+                      disabled={addingUploadIds.includes(item.id) || isLibraryItemUploaded(item.id)}
+                      className="inline-flex rounded-full border border-white/10 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/10 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isLibraryItemUploaded(item.id)
+                        ? "Uploaded"
+                        : addingUploadIds.includes(item.id)
+                          ? "Adding..."
+                          : "Add as upload"}
+                    </button>
                     <button
                       type="button"
                       onClick={() => void handleDelete(item.id)}

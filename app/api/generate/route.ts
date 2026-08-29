@@ -63,45 +63,17 @@ function extractGeminiInlineImage(response: GeminiInlineResponse) {
   throw new Error("The Gemini image model returned no image bytes.");
 }
 
-function buildGeminiInstruction(input: {
-  mode: "generate" | "edit";
-  prompt: string;
-  aspectRatio: ImageAspectRatio;
-  imageSize: ImageSizeChoice;
-  hasMask: boolean;
-}) {
-  const lines = [
-    `Task: ${input.mode === "edit" ? "edit an image" : "generate an image"}.`,
-    `Prompt: ${input.prompt}`,
-    `Target aspect ratio: ${input.aspectRatio}.`,
-    `Target size hint: ${input.imageSize}.`,
-    "Return an image result.",
-  ];
-
-  if (input.mode === "edit") {
-    lines.push("Use uploaded reference images as source context for the edit.");
-  }
-
-  if (input.hasMask) {
-    lines.push("The final uploaded image is an edit mask. Prefer edits inside the masked region.");
-  }
-
-  return lines.join("\n");
-}
-
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
-    const mode = getFormValue(formData, "mode") === "edit" ? "edit" : "generate";
     const model = getFormValue(formData, "model");
     const prompt = getFormValue(formData, "prompt");
     const aspectRatio = normalizeRatio(getFormValue(formData, "aspectRatio"));
     const imageSize = normalizeSize(getFormValue(formData, "imageSize"));
-    const baseImage = formData.get("baseImage");
-    const referenceFiles = formData
-      .getAll("references")
+    const uploadFiles = formData
+      .getAll("uploads")
       .filter((entry): entry is File => entry instanceof File && isImageFile(entry));
-    const maskFile = formData.get("mask");
+    const mode: "generate" | "edit" = uploadFiles.length > 0 ? "edit" : "generate";
 
     if (!model) {
       return Response.json({ error: "Select a model first." }, { status: 400 });
@@ -111,15 +83,8 @@ export async function POST(request: Request) {
       return Response.json({ error: "Prompt is required." }, { status: 400 });
     }
 
-    if (mode === "edit" && !(baseImage instanceof File && isImageFile(baseImage))) {
-      return Response.json({ error: "Add a valid base image for edit mode." }, { status: 400 });
-    }
-
     const ai = getImageClient();
-    const referenceCount =
-      (baseImage instanceof File ? 1 : 0) +
-      referenceFiles.length +
-      (maskFile instanceof File ? 1 : 0);
+    const referenceCount = uploadFiles.length;
 
     const parts: Array<
       | { text: string }
@@ -131,42 +96,16 @@ export async function POST(request: Request) {
         }
     > = [
       {
-        text: buildGeminiInstruction({
-          mode,
-          prompt,
-          aspectRatio,
-          imageSize,
-          hasMask: maskFile instanceof File,
-        }),
+        text: prompt,
       },
     ];
 
-    if (mode === "edit" && baseImage instanceof File) {
-      const baseBytes = await toBase64(baseImage);
-      parts.push({
-        inlineData: {
-          data: baseBytes,
-          mimeType: baseImage.type || "image/png",
-        },
-      });
-    }
-
-    for (const referenceFile of referenceFiles) {
-      const bytes = await toBase64(referenceFile);
+    for (const uploadFile of uploadFiles) {
+      const bytes = await toBase64(uploadFile);
       parts.push({
         inlineData: {
           data: bytes,
-          mimeType: referenceFile.type || "image/png",
-        },
-      });
-    }
-
-    if (maskFile instanceof File) {
-      const maskBytes = await toBase64(maskFile);
-      parts.push({
-        inlineData: {
-          data: maskBytes,
-          mimeType: maskFile.type || "image/png",
+          mimeType: uploadFile.type || "image/png",
         },
       });
     }

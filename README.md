@@ -1,16 +1,16 @@
 # Nano Banana Image Studio
 
-A focused image generation and editing web app built with Next.js and Google GenAI.
+A focused image generation web app with optional upload context, built with Next.js and Google GenAI.
 
 This project is intentionally **vibe-coded**: fast iteration, practical UX choices, and direct product-first implementation.
 
 ## What This App Does
 
 - Generates images using a fixed Nano Banana model set.
-- Supports image editing with:
-	- a required base image
-	- optional reference images
-	- optional mask image
+- Uses one prompt-first workflow:
+	- no uploads: generate from scratch
+	- one or more uploads: all uploaded images are used as equal context
+	- the prompt decides what should happen with uploaded images
 - Stores generated results in a persistent server-side library.
 - Supports deleting images from the library.
 - Keeps your latest prompt, model, aspect ratio, and image size in session storage.
@@ -71,7 +71,7 @@ npm run start
 
 - `app/page.tsx` - server entry that hydrates initial model/library data
 - `app/studio.tsx` - main client UI
-- `app/api/generate/route.ts` - generation and edit endpoint
+- `app/api/generate/route.ts` - image generation endpoint with optional upload context
 - `app/api/models/route.ts` - model list endpoint
 - `app/api/library/**` - library metadata/image/delete endpoints
 - `lib/google-genai.ts` - GenAI client + model config

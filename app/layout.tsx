@@ -1,28 +1,29 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Google_Sans, Google_Sans_Code } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const googleSans = Google_Sans({
+  variable: "--font-google-sans",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const googleSansCode = Google_Sans_Code({
+  variable: "--font-google-sans-code",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
-  title: "Nogonad Image Studio",
-  description: "A single-purpose Gemini image generation and editing workspace.",
+  title: "Nogonad - Banana 🍌",
+  description: "Image generation powered by Google Gemini, using the Nano Banana models.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${googleSans.variable} ${googleSansCode.variable} h-full antialiased`}
     >
+      <link rel="icon" href="/icon.png" sizes="192x192" />
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );
