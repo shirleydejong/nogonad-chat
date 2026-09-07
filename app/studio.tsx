@@ -1,7 +1,9 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ImageLightbox } from "@/app/components/image-lightbox";
 import type { AvailableImageModel, ImageAspectRatio, ImageSizeChoice } from "@/lib/google-genai";
 import type { LibraryItem } from "@/lib/library-store";
 
@@ -37,12 +39,33 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(initialModelError ?? null);
   const [addingUploadIds, setAddingUploadIds] = useState<string[]>([]);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const addUploadRequestRef = useRef<string | null>(null);
 
   const selectedItem = useMemo(
     () => items.find((item) => item.id === selectedItemId) ?? items[0] ?? null,
     [items, selectedItemId],
   );
+
+  const lightboxItems = useMemo(
+    () =>
+      items.map((item) => ({
+        id: item.id,
+        prompt: item.prompt,
+        imageUrl: `/api/library/${item.id}/image`,
+      })),
+    [items],
+  );
+
+  const selectedLightboxIndex = useMemo(() => {
+    if (!selectedItem) {
+      return null;
+    }
+
+    const index = items.findIndex((item) => item.id === selectedItem.id);
+    return index >= 0 ? index : null;
+  }, [items, selectedItem]);
 
   useEffect(() => {
     const savedPrompt = sessionStorage.getItem(SESSION_PROMPT_KEY);
@@ -81,6 +104,27 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
   useEffect(() => {
     sessionStorage.setItem(SESSION_SIZE_KEY, imageSize);
   }, [imageSize]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const addUploadId = params.get("add-upload");
+
+    if (!addUploadId) {
+      return;
+    }
+
+    if (addUploadRequestRef.current === addUploadId) {
+      return;
+    }
+
+    const match = items.find((item) => item.id === addUploadId);
+    if (match) {
+      addUploadRequestRef.current = addUploadId;
+      void addLibraryItemAsUpload(match);
+    }
+
+    window.history.replaceState({}, "", window.location.pathname);
+  }, [items]);
 
   function isAcceptedImage(file: File) {
     return file.type.startsWith("image/");
@@ -257,6 +301,29 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-4 py-4 sm:px-6 lg:px-8 lg:py-6">
+      <header className="rounded-[24px] border border-white/10 bg-[color:var(--panel)] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-cyan-200/80">Studio</p>
+            <h1 className="text-2xl font-semibold sm:text-3xl">Create images</h1>
+          </div>
+          <nav className="flex items-center gap-3">
+            <Link
+              href="/"
+              className="inline-flex rounded-full border border-cyan-300/25 bg-cyan-300/10 px-4 py-2 text-xs font-semibold text-cyan-50 transition hover:bg-cyan-300/18"
+            >
+              Studio
+            </Link>
+            <Link
+              href="/library"
+              className="inline-flex rounded-full border border-white/10 px-4 py-2 text-xs font-semibold text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/10"
+            >
+              Library
+            </Link>
+          </nav>
+        </div>
+      </header>
+
       <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
         <div className="rounded-[28px] border border-white/10 bg-[color:var(--panel)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl sm:p-8">
           <div className="flex flex-col gap-4 border-b border-white/10 pb-6">
@@ -417,9 +484,11 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
           <div className="mt-6 overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/60 flex flex-col">
             {selectedItem ? (
               <>
-                <div className="w-full">
-                  <img src={`/api/library/${selectedItem.id}/image`} alt={selectedItem.prompt} className="block h-auto w-full" />
-                </div>
+                <button type="button" onClick={() => setLightboxIndex(selectedLightboxIndex ?? 0)} className="block w-full text-left">
+                  <div className="w-full">
+                    <img src={`/api/library/${selectedItem.id}/image`} alt={selectedItem.prompt} className="block h-auto w-full cursor-pointer" />
+                  </div>
+                </button>
                 <div className="space-y-3 p-5">
                   <p className="text-sm font-medium text-slate-100">{selectedItem.prompt}</p>
                   <div className="grid gap-2 text-xs text-[color:var(--muted)] sm:grid-cols-2">
@@ -464,81 +533,14 @@ export function ImageStudio({ initialModels, initialModelError, initialLibraryIt
         </aside>
       </section>
 
-      <section className="rounded-[28px] border border-white/10 bg-[color:var(--panel)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.28)] backdrop-blur-xl sm:p-8">
-        <div className="flex items-center justify-between gap-4 border-b border-white/10 pb-4">
-          <div>
-            <h2 className="text-xl font-semibold">Library</h2>
-            <p className="text-sm text-[color:var(--muted)]">Saved PNGs live on the server filesystem and survive refreshes.</p>
-          </div>
-          <div className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.24em] text-slate-300">
-            {items.length} items
-          </div>
-        </div>
+      {lightboxIndex !== null && lightboxItems.length > 0 ? (
+        <ImageLightbox
+          items={lightboxItems}
+          startIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      ) : null}
 
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {items.length === 0 ? (
-            <div className="col-span-full rounded-[24px] border border-dashed border-white/15 px-6 py-16 text-center text-sm text-[color:var(--muted)]">
-              Your saved images will appear here.
-            </div>
-          ) : (
-            items.map((item) => (
-              <article key={item.id} className="overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/60">
-                <button type="button" onClick={() => setSelectedItemId(item.id)} className="block w-full text-left">
-                  <div className="relative aspect-square w-full">
-                    <Image
-                      src={`/api/library/${item.id}/image`}
-                      alt={item.prompt}
-                      fill
-                      unoptimized
-                      sizes="(max-width: 640px) 100vw, (max-width: 1280px) 50vw, 33vw"
-                      className="object-cover cursor-pointer"
-                    />
-                  </div>
-                </button>
-                <div className="space-y-3 p-4">
-                  <div className="space-y-1">
-                    <p className="line-clamp-2 text-sm font-medium text-slate-100">{item.prompt}</p>
-                    <p className="text-xs text-[color:var(--muted)]">{item.model}</p>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 text-xs text-[color:var(--muted)]">
-                    <span>{item.aspectRatio}</span>
-                    <span>{item.imageSize}</span>
-                    <span>{formatDate(item.createdAt)}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <a
-                      href={`/api/library/${item.id}/image`}
-                      download={`${item.id}.png`}
-                      className="inline-flex rounded-full border border-white/10 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/10"
-                    >
-                      Download
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() => void addLibraryItemAsUpload(item)}
-                      disabled={addingUploadIds.includes(item.id) || isLibraryItemUploaded(item.id)}
-                      className="inline-flex rounded-full border border-white/10 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-cyan-300/30 hover:bg-cyan-300/10 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {isLibraryItemUploaded(item.id)
-                        ? "Uploaded"
-                        : addingUploadIds.includes(item.id)
-                          ? "Adding..."
-                          : "Add as upload"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleDelete(item.id)}
-                      className="inline-flex rounded-full border border-white/10 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-rose-300/30 hover:bg-rose-300/10"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              </article>
-            ))
-          )}
-        </div>
-      </section>
     </div>
   );
 }
